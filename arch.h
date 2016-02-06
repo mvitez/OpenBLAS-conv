@@ -52,34 +52,3 @@
 #else
 #define WMB
 #endif
-
-#if defined(_MSC_VER) && !defined(__clang__)
-#define CONSTRUCTOR __cdecl
-#define DESTRUCTOR __cdecl
-#else
-#define CONSTRUCTOR	__attribute__ ((constructor))
-#define DESTRUCTOR	__attribute__ ((destructor))
-#endif
-
-#if defined(_MSC_VER) && !defined(__clang__) && !defined DODOUBLE
-#include <windows.h>
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
-{
-  switch (ul_reason_for_call)
-  {
-    case DLL_PROCESS_ATTACH:
-      gemmconv_init();
-      break;
-    case DLL_THREAD_ATTACH:
-      break;
-    case DLL_THREAD_DETACH:
-      break;
-    case DLL_PROCESS_DETACH:
-      gemmconv_exit();
-      break;
-    default:
-      break;
-  }
-  return TRUE;
-}
-#endif

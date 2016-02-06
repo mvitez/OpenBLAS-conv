@@ -46,6 +46,9 @@
 #include "arch.h"
 #include "param.h"	// From OpenBLAS, here we only take xGEMM_DEFAULT_UNROLL_x
 
+void *blas_memory_alloc(int);
+void blas_memory_free(void *);
+
 #ifndef SWITCH_RATIO
 #define SWITCH_RATIO 2
 #endif
@@ -112,14 +115,6 @@ typedef struct {
 #define KERNEL_OPERATION(M, N, K, ALPHA, SA, SB, C, LDC, X, Y) fgemm_kernel(M, N, K, ALPHA, SA, SB, (FLOAT *)(C) + ((X) + (Y) * LDC), LDC)
 #define BETA_OPERATION(M_FROM, M_TO, N_FROM, N_TO, BETA, C, LDC) fgemm_beta((M_TO) - (M_FROM), (N_TO - N_FROM), 0, \
 		  BETA, NULL, 0, NULL, 0, (FLOAT *)(C) + (M_FROM) + (N_FROM) * (LDC), LDC)
-
-#ifdef DODOUBLE
-extern int blasconv_threads_num;
-extern char *blasconv_saa[MAX_CPU_NUMBER], *blasconv_sba[MAX_CPU_NUMBER];
-#else
-int blasconv_threads_num;
-void *blasconv_saa[MAX_CPU_NUMBER], *blasconv_sba[MAX_CPU_NUMBER];
-#endif
 
 static struct {
 	int x1, y1, plane;
@@ -655,10 +650,9 @@ static void icopy_operation(int m, int n, struct fgemmargs *args, int x, int y, 
 
 static job_t job[MAX_CPU_NUMBER];
 
-static int gemm_thread(long mypos, long nthreads, struct fgemmargs *args, long *range_m, long *range_n)
+static int gemm_thread(long mypos, long nthreads, struct fgemmargs *args, long *range_m, long *range_n, FLOAT *sa, FLOAT *sb)
 {
 	FLOAT *buffer[DIVIDE_RATE];
-	FLOAT *sa, *sb;
 	long m_from, m_to, n_from, n_to;
 	long xxx, bufferside;
 	long ls, min_l, jjs, min_jj;
@@ -675,8 +669,6 @@ static int gemm_thread(long mypos, long nthreads, struct fgemmargs *args, long *
 	long ldb = args->ldb;
 	long ldc = args->ldc;
 
-	sa = (FLOAT *)blasconv_saa[mypos];
-	sb = (FLOAT *)blasconv_sba[mypos];
 	m_from = 0;
 	m_to = m;
 
@@ -794,15 +786,13 @@ static int gemm_thread(long mypos, long nthreads, struct fgemmargs *args, long *
 	return 0;
 }
 
-static int gemm_single(int mypos, struct fgemmargs *args)
+static int gemm_single(int mypos, struct fgemmargs *args, FLOAT *sa, FLOAT *sb)
 {
 	long m_from, m_to, n_from, n_to;
 
 	long ls, is, js;
 	long min_l, min_i, min_j;
 	long jjs, min_jj;
-	FLOAT *sa = (FLOAT *)blasconv_saa[mypos];
-	FLOAT *sb = (FLOAT *)blasconv_sba[mypos];
 	long l1stride, gemm_p, l2size;
 	long m = args->m;
 	long n = args->n;
@@ -893,6 +883,10 @@ void fgemmargs(struct fgemmargs *args)
 	long width, i, j, k1, js;
 	long m1, n1, n_from, n_to;
 
+	int threads_num = omp_get_max_threads();
+	FLOAT *buffer = (FLOAT *)blas_memory_alloc(0);
+	FLOAT *sa = (FLOAT *)((long)buffer +GEMM_DEFAULT_OFFSET_A);
+	FLOAT *sb = (FLOAT *)(((long)sa + ((GEMM_P * GEMM_Q * sizeof(FLOAT) + GEMM_ALIGN) & ~GEMM_ALIGN)) + GEMM_DEFAULT_OFFSET_B);
 	range_M[0] = 0;
 	m1 = args->m;
 	num_cpu_m  = 0;
@@ -902,31 +896,33 @@ void fgemmargs(struct fgemmargs *args)
 		if(args->ks0 && omp_get_thread_num() == 0)
 			calctabs(args);
 #pragma omp barrier
-		gemm_single(omp_get_thread_num(), args);
+		gemm_single(omp_get_thread_num(), args, sa, sb);
 #pragma omp barrier
 		if(args->ks0 && omp_get_thread_num() == 0)
 		{
 			free(xtab);
 			free(ytab);
 		}
+		blas_memory_free(buffer);
 		return;
 	}
 	if(args->ks0)
 		calctabs(args);
-	if((args->m < blasconv_threads_num * SWITCH_RATIO) || (args->n < blasconv_threads_num * SWITCH_RATIO))
+	if((args->m < threads_num * SWITCH_RATIO) || (args->n < threads_num * SWITCH_RATIO))
 	{
-		gemm_single(0, args);
+		gemm_single(0, args, sa, sb);
 		if(args->ks0)
 		{
 			free(xtab);
 			free(ytab);
 		}
+		blas_memory_free(buffer);
 		return;
 	}
 
 	while(m1 > 0)
 	{
-		width = (m1 + blasconv_threads_num - num_cpu_m - 1) / (blasconv_threads_num - num_cpu_m);
+		width = (m1 + threads_num - num_cpu_m - 1) / (threads_num - num_cpu_m);
 		m1 -= width;
 		if(m1 < 0)
 			width = width + m1;
@@ -936,16 +932,16 @@ void fgemmargs(struct fgemmargs *args)
 	n_from = 0;
 	n_to   = args->n;
 
-	for(js = n_from; js < n_to; js += GEMM_R * blasconv_threads_num)
+	for(js = n_from; js < n_to; js += GEMM_R * threads_num)
 	{
 		n1 = n_to - js;
-		if (n1 > GEMM_R * blasconv_threads_num)
-			n1 = GEMM_R * blasconv_threads_num;
+		if (n1 > GEMM_R * threads_num)
+			n1 = GEMM_R * threads_num;
 		range_N[0] = js;
 		num_cpu_n  = 0;
 		while (n1 > 0)
 		{
-			width = (n1 + blasconv_threads_num - num_cpu_n - 1) / (blasconv_threads_num - num_cpu_n);
+			width = (n1 + threads_num - num_cpu_n - 1) / (threads_num - num_cpu_n);
 			n1 -= width;
 			if(n1 < 0)
 				width = width + n1;
@@ -958,14 +954,15 @@ void fgemmargs(struct fgemmargs *args)
 				for (k1 = 0; k1 < DIVIDE_RATE; k1++)
 					job[j].working[i][CACHE_LINE_SIZE * k1] = 0;
 #pragma omp parallel for
-		for(i = 0; i < blasconv_threads_num; i++)
-			gemm_thread(i, blasconv_threads_num, args, range_M, range_N);
+		for(i = 0; i < threads_num; i++)
+			gemm_thread(i, threads_num, args, range_M, range_N, sa, sb);
 	}
 	if(args->ks0)
 	{
 		free(xtab);
 		free(ytab);
 	}
+	blas_memory_free(buffer);
 }
 
 int fgemmconv(struct fgemmconv_params *p)
@@ -1000,26 +997,3 @@ int fgemmconv(struct fgemmconv_params *p)
 	fgemmargs(&a);
 	return 0;
 }
-
-#ifndef DODOUBLE
-void CONSTRUCTOR gemmconv_init()
-{
-	int i;
-
-	if(!blasconv_threads_num)
-		blasconv_threads_num = omp_get_max_threads();
-	for(i = 0; i < blasconv_threads_num; i++)
-	{
-		blasconv_saa[i] = malloc(BUFFER_SIZE);
-		blasconv_sba[i] = blasconv_saa[i] + ((GEMM_P * GEMM_Q * sizeof(double) + GEMM_ALIGN) & ~GEMM_ALIGN);
-	}
-}
-
-void DESTRUCTOR gemmconv_exit()
-{
-	int i;
-
-	for(i = 0; i < blasconv_threads_num; i++)
-		free(blasconv_saa[i]);
-}
-#endif
