@@ -1,22 +1,24 @@
 OPENBLASDIR = /opt/OpenBLAS
-OPENBLASSRCDIR = /opt/src/OpenBLAS
 
 CFLAGS = -Wall -c -fopenmp -fPIC -O3
 CC = gcc
 
 .PHONY : all
-all : libopenblas-conv.so stest dtest
+all : libopenblas-conv.so stest dtest test
 
-sgemmconv.o: gemmconv.c gemmconv.h
-	$(CC) $(CFLAGS) gemmconv.c -o sgemmconv.o -I$(OPENBLASSRCDIR)
+config.h:
+	sed 's/OPENBLAS_//' $(OPENBLASDIR)/include/openblas_config.h >config.h
 
-dgemmconv.o: gemmconv.c gemmconv.h
-	$(CC) $(CFLAGS) -DDODOUBLE gemmconv.c -o dgemmconv.o -I$(OPENBLASSRCDIR)
+sgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h
+	$(CC) $(CFLAGS) gemmconv.c -o sgemmconv.o
 
-stest.o: test.c gemmconv.h
+dgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h
+	$(CC) $(CFLAGS) -DDODOUBLE gemmconv.c -o dgemmconv.o
+
+stest.o: test.c sgemmconv.o gemmconv.h
 	$(CC) $(CFLAGS) test.c -o stest.o
 
-dtest.o: test.c gemmconv.h
+dtest.o: test.c dgemmconv.o gemmconv.h
 	$(CC) $(CFLAGS) -DDODOUBLE test.c -o dtest.o
 
 libopenblas-conv.so: sgemmconv.o dgemmconv.o
@@ -34,7 +36,7 @@ test: stest dtest
 
 .PHONY : clean
 clean :
-	rm -f *.o libopenblas-conv.so stest dtest
+	rm -f *.o config.h libopenblas-conv.so stest dtest
 
 install:
 	cp libopenblas-conv.so $(OPENBLASDIR)/lib

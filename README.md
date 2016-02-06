@@ -5,14 +5,13 @@ has been tested on various flavours of Linux.
 
 ## Building
 
-Be sure to have a built copy of OpenBLAS in its source directory, then
-
-    make OPENBLASDIR=<OpenBLAS base installation directory> OPENBLASSRCDIR=<OpenBLAS source directory>
+    make OPENBLASDIR=<OpenBLAS base installation directory>
 
 ## Installing
 
 	make install OPENBLASDIR=<OpenBLAS base installation directory>
 	
+If no OPENBLASDIR is given, /opt/OpenBLAS is assumed.
 This will install the library in the same place where OpenBLAS is installed. Since OpenBLAS is
 installed in /opt/OpenBLAS by default and /opt/OpenBLAS/lib is not in the default search paths
 for libraries, assure to have it set (e.g. export LD_LIBRARY_PATH=/opt/OpenBLAS/lib on Linux,
