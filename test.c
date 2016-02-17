@@ -16,7 +16,7 @@ int main()
 {
 	int i;
 	struct fgemmconv_params p;
-	FLOAT sum;
+	double sum;
 	p.dW = p.dH = 2;
 	p.padW = p.padH = 2;
 	p.kW = p.kH = 3;
@@ -42,12 +42,11 @@ int main()
 	sum = 0;
 	for(i = 0; i < p.osize[0] * p.osize[1] * p.osize[2]; i++)
 		sum += p.o[i];
+	if(fabs(sum - 1626531.0) < 1)
 #ifdef DODOUBLE
-	if(fabs(sum - 1626531.84) < 1)
 		printf("The double output is correct\n");
 	else printf("The double output is wrong\n");
 #else
-	if(fabs(sum - 1626206.125) < 1)
 		printf("The float output is correct\n");
 	else printf("The float output is wrong\n");
 #endif
