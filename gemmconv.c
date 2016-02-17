@@ -948,14 +948,13 @@ void fgemmargs(struct fgemmargs *args)
 			range_N[num_cpu_n + 1] = range_N[num_cpu_n] + width;
 			num_cpu_n++;
 		}
-
 		for (j = 0; j < num_cpu_m; j++)
 			for (i = 0; i < num_cpu_m; i++)
 				for (k1 = 0; k1 < DIVIDE_RATE; k1++)
 					job[j].working[i][CACHE_LINE_SIZE * k1] = 0;
 #pragma omp parallel for
 		for(i = 0; i < threads_num; i++)
-			gemm_thread(i, threads_num, args, range_M, range_N, sa + i * BUFFER_SIZE, sb + i * BUFFER_SIZE);
+			gemm_thread(i, threads_num, args, range_M, range_N, (FLOAT *)((char *)sa + i * BUFFER_SIZE), (FLOAT *)((char *)sb + i * BUFFER_SIZE));
 	}
 	if(args->ks0)
 	{
