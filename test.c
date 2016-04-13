@@ -17,26 +17,28 @@ int main()
 	int i;
 	struct fgemmconv_params p;
 	double sum;
+	p.conv = 0;
+	p.transi = 0;
 	p.dW = p.dH = 2;
 	p.padW = p.padH = 2;
-	p.kW = p.kH = 3;
+	p.ksize[2] = p.ksize[3] = 3;
 	p.isize[0] = 3;
 	p.isize[1] = 720;
 	p.isize[2] = 1280;
 	p.osize[0] = 2;
-	p.osize[1] = (p.isize[1] + 2 * p.padH - p.kH) / p.dH + 1;
-	p.osize[2] = (p.isize[2] + 2 * p.padW - p.kW) / p.dW + 1;
+	p.osize[1] = (p.isize[1] + 2 * p.padH - p.ksize[2]) / p.dH + 1;
+	p.osize[2] = (p.isize[2] + 2 * p.padW - p.ksize[3]) / p.dW + 1;
 	p.istride[0] = p.isize[1] * p.isize[2];
 	p.istride[1] = p.isize[2];
-	p.ostride[0] = p.osize[1] * p.osize[2];
-	p.ostride[1] = p.osize[2];
+	p.ostride0 = p.osize[1] * p.osize[2];
+	p.owidth = p.osize[2];
 	p.alpha = p.beta = 1;
 	p.i = calloc(p.isize[0] * p.isize[1] * p.isize[2], sizeof(*p.i));
-	p.k = calloc(p.isize[0] * p.osize[0] * p.kH * p.kW, sizeof(*p.i));
+	p.k = calloc(p.isize[0] * p.osize[0] * p.ksize[2] * p.ksize[3], sizeof(*p.i));
 	p.o = calloc(p.osize[0] * p.osize[1] * p.osize[2], sizeof(*p.i));
 	for(i = 0; i < p.isize[0] * p.isize[1] * p.isize[2]; i++)
 		p.i[i] = i % 100 * 0.01;
-	for(i = 0; i < p.isize[0] * p.osize[0] * p.kW * p.kH; i++)
+	for(i = 0; i < p.isize[0] * p.osize[0] * p.ksize[3] * p.ksize[2]; i++)
 		p.k[i] = i % 100 * 0.01;
 	fgemmconv(&p);
 	sum = 0;

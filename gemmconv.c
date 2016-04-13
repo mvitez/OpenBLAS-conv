@@ -36,7 +36,7 @@
 /* or implied, of The University of Texas at Austin.                 */
 /*********************************************************************/
 
-/* Modified by Marko Vitez for University of Purdue                  */
+/* Modified by Marko Vitez for Purdue University                     */
 
 #include <omp.h>
 #include <stdlib.h>
@@ -126,23 +126,25 @@ static struct {
 
 static void calctabs(struct fgemmargs *args)
 {
-	int x, y;
+	int x, y, xmax, ymax;
 
-	xtab = malloc(sizeof(*xtab) * args->k);
-	ytab = malloc(sizeof(*ytab) * args->m);
-	for(x = 0; x < args->k; x++)
+	xmax = args->transa ? args->m : args->k;
+	ymax = args->transa ? args->k : args->m;
+	xtab = malloc(sizeof(*xtab) * xmax);
+	ytab = malloc(sizeof(*ytab) * ymax);
+	for(x = 0; x < xmax; x++)
 	{
-		xtab[x].plane = x / args->ks0;
-		int x1 = x % args->ks0;
-		int y1 = x1 / args->ks1 - args->padH;
-		x1 = x1 % args->ks1 - args->padW;
+		xtab[x].plane = x / args->kHW;
+		int x1 = x % args->kHW;
+		int y1 = x1 / args->kW - args->padH;
+		x1 = x1 % args->kW - args->padW;
 		xtab[x].y1 = y1 * args->is1;
 		xtab[x].x1 = x1;
 	}
-	for(y = 0; y < args->m; y++)
+	for(y = 0; y < ymax; y++)
 	{
-		int y1 = y / args->os1 * args->dH;
-		int x1 = y % args->os1 * args->dW;
+		int y1 = y / args->ow * args->dH;
+		int x1 = y % args->ow * args->dW;
 		ytab[y].y1 = y1 * args->is1;
 		ytab[y].x1 = x1;
 	}
@@ -164,488 +166,57 @@ static FLOAT get_a_nopad(struct fgemmargs *args, int x, int y)
 	return args->a[xtab[x].plane*args->is0 + y1 + x1];
 }
 
-#if GEMM_UNROLL_M == 2
-
-static void icopy_operation_pad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
+static FLOAT get_a_pad_t(struct fgemmargs *args, int y, int x)
 {
-	int i, i1, j, im;
-
-	for(j = 0; j + 1 < n; j += 2)
-	{
-		for(i = 0; i < m; i += 2)
-		{
-			im = m - i > 2 ? 2 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 2)
-		{
-			im = m - i > 2 ? 2 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_pad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
+	int x1 = xtab[x].x1 + ytab[y].x1;
+	int y1 = xtab[x].y1 + ytab[y].y1;
+	if(y1 < 0 || y1 >= args->is0 || x1 < 0 || x1 >= args->is1)
+		return 0;
+	return args->a[xtab[x].plane*args->is0 + y1 + x1];
 }
 
-static void icopy_operation_nopad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
+static FLOAT get_a_nopad_t(struct fgemmargs *args, int y, int x)
 {
-	int i, i1, j, im;
-
-	for(j = 0; j + 1 < n; j += 2)
-	{
-		for(i = 0; i < m; i += 2)
-		{
-			im = m - i > 2 ? 2 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 2)
-		{
-			im = m - i > 2 ? 2 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_nopad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
+	int x1 = xtab[x].x1 + ytab[y].x1;
+	int y1 = xtab[x].y1 + ytab[y].y1;
+	return args->a[xtab[x].plane*args->is0 + y1 + x1];
 }
 
-#elif GEMM_UNROLL_M == 4
-static void icopy_operation_pad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
+static FLOAT get_b_conv(struct fgemmargs *args, int x, int y)
 {
-	int i, i1, j, im;
-
-	for(j = 0; j + 3 < n; j += 4)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_pad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
+	int plane = x / args->kHW;
+	int rest = x % args->kHW;
+	int iW = rest % args->kW;
+	int iH = rest / args->kW;
+	FLOAT a = args->b[plane * args->kPHW + y * args->kW * args->kH +
+		(args->kH - iH - 1) * args->kW + (args->kW - iW - 1)];
+	return a;
 }
 
-static void icopy_operation_nopad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
-{
-	int i, i1, j, im;
+#define GEMM_UNROLL_a_pad GEMM_UNROLL_M
+#define GEMM_UNROLL_a_nopad GEMM_UNROLL_M
+#define GEMM_UNROLL_a_pad_t GEMM_UNROLL_M
+#define GEMM_UNROLL_a_nopad_t GEMM_UNROLL_M
+#define GEMM_UNROLL_b_conv GEMM_UNROLL_N
 
-	for(j = 0; j + 3 < n; j += 4)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 4)
-		{
-			im = m - i > 4 ? 4 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_nopad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
-}
-
-#elif GEMM_UNROLL_M == 8
-
-static void icopy_operation_pad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
-{
-	int i, i1, j, im;
-
-	for(j = 0; j + 7 < n; j += 8)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*8 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*8 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*8 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*8 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-				b[i1*8 + 4] = get_a_pad(args, x+i+i1, y+j+4);
-				b[i1*8 + 5] = get_a_pad(args, x+i+i1, y+j+5);
-				b[i1*8 + 6] = get_a_pad(args, x+i+i1, y+j+6);
-				b[i1*8 + 7] = get_a_pad(args, x+i+i1, y+j+7);
-			}
-			b += im * 8;
-		}
-	}
-	if(j + 3 < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-		j += 4;
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_pad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
-}
-
-static void icopy_operation_nopad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
-{
-	int i, i1, j, im;
-
-	for(j = 0; j + 7 < n; j += 8)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*8 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*8 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*8 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*8 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-				b[i1*8 + 4] = get_a_nopad(args, x+i+i1, y+j+4);
-				b[i1*8 + 5] = get_a_nopad(args, x+i+i1, y+j+5);
-				b[i1*8 + 6] = get_a_nopad(args, x+i+i1, y+j+6);
-				b[i1*8 + 7] = get_a_nopad(args, x+i+i1, y+j+7);
-			}
-			b += im * 8;
-		}
-	}
-	if(j + 3 < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-		j += 4;
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 8)
-		{
-			im = m - i > 8 ? 8 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_nopad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
-}
-
-#elif GEMM_UNROLL_M == 16
-
-static void icopy_operation_pad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
-{
-	int i, i1, j, im;
-
-	for(j = 0; j + 15 < n; j += 16)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*16 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*16 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*16 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*16 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-				b[i1*16 + 4] = get_a_pad(args, x+i+i1, y+j+4);
-				b[i1*16 + 5] = get_a_pad(args, x+i+i1, y+j+5);
-				b[i1*16 + 6] = get_a_pad(args, x+i+i1, y+j+6);
-				b[i1*16 + 7] = get_a_pad(args, x+i+i1, y+j+7);
-				b[i1*16 + 8] = get_a_pad(args, x+i+i1, y+j+8);
-				b[i1*16 + 9] = get_a_pad(args, x+i+i1, y+j+9);
-				b[i1*16 + 10] = get_a_pad(args, x+i+i1, y+j+10);
-				b[i1*16 + 11] = get_a_pad(args, x+i+i1, y+j+11);
-				b[i1*16 + 12] = get_a_pad(args, x+i+i1, y+j+12);
-				b[i1*16 + 13] = get_a_pad(args, x+i+i1, y+j+13);
-				b[i1*16 + 14] = get_a_pad(args, x+i+i1, y+j+14);
-				b[i1*16 + 15] = get_a_pad(args, x+i+i1, y+j+15);
-			}
-			b += im * 16;
-		}
-	}
-	if(j + 7 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*8 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*8 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*8 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*8 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-				b[i1*8 + 4] = get_a_pad(args, x+i+i1, y+j+4);
-				b[i1*8 + 5] = get_a_pad(args, x+i+i1, y+j+5);
-				b[i1*8 + 6] = get_a_pad(args, x+i+i1, y+j+6);
-				b[i1*8 + 7] = get_a_pad(args, x+i+i1, y+j+7);
-			}
-			b += im * 8;
-		}
-		j += 8;
-	}
-	if(j + 3 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_pad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_pad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-		j += 4;
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_pad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_pad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_pad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
-}
-
-static void icopy_operation_nopad(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
-{
-	int i, i1, j, im;
-
-	for(j = 0; j + 15 < n; j += 16)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*16 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*16 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*16 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*16 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-				b[i1*16 + 4] = get_a_nopad(args, x+i+i1, y+j+4);
-				b[i1*16 + 5] = get_a_nopad(args, x+i+i1, y+j+5);
-				b[i1*16 + 6] = get_a_nopad(args, x+i+i1, y+j+6);
-				b[i1*16 + 7] = get_a_nopad(args, x+i+i1, y+j+7);
-				b[i1*16 + 8] = get_a_nopad(args, x+i+i1, y+j+8);
-				b[i1*16 + 9] = get_a_nopad(args, x+i+i1, y+j+9);
-				b[i1*16 + 10] = get_a_nopad(args, x+i+i1, y+j+10);
-				b[i1*16 + 11] = get_a_nopad(args, x+i+i1, y+j+11);
-				b[i1*16 + 12] = get_a_nopad(args, x+i+i1, y+j+12);
-				b[i1*16 + 13] = get_a_nopad(args, x+i+i1, y+j+13);
-				b[i1*16 + 14] = get_a_nopad(args, x+i+i1, y+j+14);
-				b[i1*16 + 15] = get_a_nopad(args, x+i+i1, y+j+15);
-			}
-			b += im * 16;
-		}
-	}
-	if(j + 7 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*8 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*8 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*8 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*8 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-				b[i1*8 + 4] = get_a_nopad(args, x+i+i1, y+j+4);
-				b[i1*8 + 5] = get_a_nopad(args, x+i+i1, y+j+5);
-				b[i1*8 + 6] = get_a_nopad(args, x+i+i1, y+j+6);
-				b[i1*8 + 7] = get_a_nopad(args, x+i+i1, y+j+7);
-			}
-			b += im * 8;
-		}
-		j += 8;
-	}
-	if(j + 3 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*4 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*4 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-				b[i1*4 + 2] = get_a_nopad(args, x+i+i1, y+j+2);
-				b[i1*4 + 3] = get_a_nopad(args, x+i+i1, y+j+3);
-			}
-			b += im * 4;
-		}
-		j += 4;
-	}
-	if(j + 1 < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-			{
-				b[i1*2 + 0] = get_a_nopad(args, x+i+i1, y+j);
-				b[i1*2 + 1] = get_a_nopad(args, x+i+i1, y+j+1);
-			}
-			b += im * 2;
-		}
-		j += 2;
-	}
-	if(j < n)
-	{
-		for(i = 0; i < m; i += 16)
-		{
-			im = m - i > 16 ? 16 : m - i;
-			for(i1 = 0; i1 < im; i1++)
-				b[i1] = get_a_nopad(args, x+i+i1, y+j);
-			b += im;
-		}
-	}
-}
-
-#else
-
-#error Unsupported GEMM_UNROLL_M value, only 2, 4, 8 and 16 implemented
-
-#endif
+#include "icopy_pad.h"
+#include "icopy_nopad.h"
+#include "icopy_pad_t.h"
+#include "icopy_nopad_t.h"
+#include "ocopy_conv.h"
 
 static void icopy_operation(int m, int n, struct fgemmargs *args, int x, int y, FLOAT *b)
 {
-	if(args->padW || args->padH)
-		icopy_operation_pad(m, n, args, x, y, b);
-	else icopy_operation_nopad(m, n, args, x, y, b);
+	if(args->transa)
+	{
+		if(args->padW || args->padH)
+			copy_operation_a_pad_t(m, n, args, x, y, b);
+		else copy_operation_a_nopad_t(m, n, args, x, y, b);
+	} else {
+		if(args->padW || args->padH)
+			copy_operation_a_pad(m, n, args, x, y, b);
+		else copy_operation_a_nopad(m, n, args, x, y, b);
+	}
 }
 
 static job_t job[MAX_CPU_NUMBER];
@@ -723,7 +294,9 @@ static int gemm_thread(long mypos, long nthreads, struct fgemmargs *args, long *
 					min_jj = 3*GEMM_UNROLL_N;
 				else if (min_jj > GEMM_UNROLL_N)
 					min_jj = GEMM_UNROLL_N;
-				OCOPY_OPERATION(min_l, min_jj, b, ldb, ls, jjs, buffer[bufferside] + min_l * (jjs - xxx) * l1stride);
+				if(args->conv)
+					copy_operation_b_conv(min_l, min_jj, args, ls, jjs, buffer[bufferside] + min_l * (jjs - xxx) * l1stride);
+				else OCOPY_OPERATION(min_l, min_jj, b, ldb, ls, jjs, buffer[bufferside] + min_l * (jjs - xxx) * l1stride);
 				KERNEL_OPERATION(min_i, min_jj, min_l, alpha, sa, buffer[bufferside] + min_l * (jjs - xxx) * l1stride, c, ldc, m_from, jjs);
 			}
 			for (i = 0; i < nthreads; i++)
@@ -852,7 +425,9 @@ static int gemm_single(int mypos, struct fgemmargs *args, FLOAT *sa, FLOAT *sb)
 					min_jj = 3*GEMM_UNROLL_N;
 				else if(min_jj > GEMM_UNROLL_N)
 					min_jj = GEMM_UNROLL_N;
-				OCOPY_OPERATION(min_l, min_jj, b, ldb, ls, jjs, sb + min_l * (jjs - js) * l1stride);
+				if(args->conv)
+					copy_operation_b_conv(min_l, min_jj, args, ls, jjs, sb + min_l * (jjs - js) * l1stride);
+				else OCOPY_OPERATION(min_l, min_jj, b, ldb, ls, jjs, sb + min_l * (jjs - js) * l1stride);
 				KERNEL_OPERATION(min_i, min_jj, min_l, alpha, sa,
 					sb + min_l * (jjs - js) * l1stride, c, ldc, m_from, jjs);
 			}
@@ -883,6 +458,13 @@ void fgemmargs(struct fgemmargs *args)
 	long width, i, j, k1, js;
 	long m1, n1, n_from, n_to;
 
+#if 0
+	printf("conv=%d, transa=%d, alpha=%f, beta=%f\n", args->transa, args->conv, args->alpha, args->beta);
+	printf("m=%ld, n=%ld, k=%ld, ldb=%ld, ldc=%ld\n", args->m, args->n, args->k, args->ldb, args->ldc);
+	printf("ow=%ld, kPHW=%ld, kHW=%ld, kW=%ld, is0=%ld, is1=%ld, ih=%ld\n", args->ow, args->kPHW, args->kHW, args->kW,
+		args->is0, args->is1, args->ih);
+	printf("dW=%ld, dH=%ld, padW=%ld, padH=%ld\n", args->dW, args->dH, args->padW, args->padH);
+#endif
 	int threads_num = omp_get_max_threads();
 	FLOAT *buffer = (FLOAT *)blas_memory_alloc(0);
 	FLOAT *sa = (FLOAT *)((long)buffer +GEMM_DEFAULT_OFFSET_A);
@@ -893,12 +475,12 @@ void fgemmargs(struct fgemmargs *args)
 
 	if(omp_in_parallel())
 	{
-		if(args->ks0 && omp_get_thread_num() == 0)
+		if(args->kHW && omp_get_thread_num() == 0)
 			calctabs(args);
 #pragma omp barrier
 		gemm_single(omp_get_thread_num(), args, sa, sb);
 #pragma omp barrier
-		if(args->ks0 && omp_get_thread_num() == 0)
+		if(args->kHW && omp_get_thread_num() == 0)
 		{
 			free(xtab);
 			free(ytab);
@@ -906,12 +488,12 @@ void fgemmargs(struct fgemmargs *args)
 		blas_memory_free(buffer);
 		return;
 	}
-	if(args->ks0)
+	if(args->kHW)
 		calctabs(args);
 	if((args->m < threads_num * SWITCH_RATIO) || (args->n < threads_num * SWITCH_RATIO))
 	{
 		gemm_single(0, args, sa, sb);
-		if(args->ks0)
+		if(args->kHW)
 		{
 			free(xtab);
 			free(ytab);
@@ -956,7 +538,7 @@ void fgemmargs(struct fgemmargs *args)
 		for(i = 0; i < threads_num; i++)
 			gemm_thread(i, threads_num, args, range_M, range_N, (FLOAT *)((char *)sa + i * BUFFER_SIZE), (FLOAT *)((char *)sb + i * BUFFER_SIZE));
 	}
-	if(args->ks0)
+	if(args->kHW)
 	{
 		free(xtab);
 		free(ytab);
@@ -968,26 +550,38 @@ int fgemmconv(struct fgemmconv_params *p)
 {
 	struct fgemmargs a;
 	// Assure output dimensions are correct
-	if(p->osize[1] != (p->isize[1] + 2 * p->padH - p->kH) / p->dH + 1)
+	if(p->osize[1] != (p->isize[1] + 2 * p->padH - p->ksize[2]) / p->dH + 1)
 		return -1;
-	if(p->osize[2] != (p->isize[2] + 2 * p->padW - p->kW) / p->dW + 1)
+	if(p->osize[2] != (p->isize[2] + 2 * p->padW - p->ksize[3]) / p->dW + 1)
 		return -1;
-	a.m = p->osize[1] * p->osize[2];
-	a.n = p->osize[0];
-	a.k = p->isize[0] * p->kH * p->kW;
+	if(p->transi)
+	{
+		a.m = p->isize[0] * p->ksize[2] * p->ksize[3];
+		a.n = p->osize[0];
+		a.k = p->osize[1] * p->osize[2];
+		a.ldb = a.k;
+		a.ldc = p->ostride0;
+	} else {
+		a.m = p->osize[1] * p->osize[2];
+		a.n = p->osize[0];
+		a.k = p->isize[0] * p->ksize[2] * p->ksize[3];
+		a.ldb = a.k;
+		a.ldc = p->ostride0;
+	}
+	a.transa = p->transi;
+	a.conv = p->conv;
 	a.alpha = p->alpha;
 	a.beta = p->beta;
-	a.ldb = p->isize[0] * p->kH * p->kW;
-	a.ldc = p->ostride[0];
 	a.a = p->i;
 	a.b = p->k;
 	a.c = p->o;
-	a.ks0 = p->kH * p->kW;
-	a.ks1 = p->kW;
+	a.kH = p->ksize[2];
+	a.kW = p->ksize[3];
+	a.kHW = p->ksize[2] * p->ksize[3];
+	a.kPHW = p->ksize[1] * p->ksize[2] * p->ksize[3];
 	a.is0 = p->istride[0];
 	a.is1 = p->istride[1];
-	a.os0 = p->ostride[0];
-	a.os1 = p->ostride[1];
+	a.ow = p->owidth;
 	a.ih =  p->isize[1];
 	a.dW = p->dW;
 	a.dH = p->dH;

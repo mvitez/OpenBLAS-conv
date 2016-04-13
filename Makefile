@@ -1,4 +1,5 @@
 OPENBLASDIR = /opt/OpenBLAS
+INSTALLDIR = /usr/local
 
 CFLAGS = -Wall -c -fopenmp -fPIC -O3
 CC = gcc
@@ -9,10 +10,25 @@ all : libopenblas-conv.so stest dtest test
 config.h:
 	sed 's/OPENBLAS_//' $(OPENBLASDIR)/include/openblas_config.h >config.h
 
-sgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h
+icopy_nopad.h: copy.h.in
+	sed 's/_type/_a_nopad/' copy.h.in >icopy_nopad.h
+
+icopy_pad.h: copy.h.in
+	sed 's/_type/_a_pad/' copy.h.in >icopy_pad.h
+
+icopy_nopad_t.h: copy.h.in
+	sed 's/_type/_a_nopad_t/' copy.h.in >icopy_nopad_t.h
+
+icopy_pad_t.h: copy.h.in
+	sed 's/_type/_a_pad_t/' copy.h.in >icopy_pad_t.h
+
+ocopy_conv.h: copy.h.in
+	sed 's/_type/_b_conv/' copy.h.in >ocopy_conv.h
+
+sgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h icopy_pad.h icopy_nopad.h icopy_pad_t.h icopy_nopad_t.h ocopy_conv.h
 	$(CC) $(CFLAGS) gemmconv.c -o sgemmconv.o
 
-dgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h
+dgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h icopy_pad.h icopy_nopad.h icopy_pad_t.h icopy_nopad_t.h ocopy_conv.h
 	$(CC) $(CFLAGS) -DDODOUBLE gemmconv.c -o dgemmconv.o
 
 stest.o: test.c sgemmconv.o gemmconv.h
@@ -36,12 +52,12 @@ test: stest dtest
 
 .PHONY : clean
 clean :
-	rm -f *.o config.h libopenblas-conv.so stest dtest
+	rm -f *.o config.h icopy_*.h ocopy_conv.h libopenblas-conv.so stest dtest
 
 install:
-	cp libopenblas-conv.so $(OPENBLASDIR)/lib
-	cp sgemmconv.h $(OPENBLASDIR)/include
+	cp gemmconv.h $(INSTALLDIR)/include
+	cp libopenblas-conv.so $(INSTALLDIR)/lib
 
 uninstall:
-	rm $(OPENBLASDIR)/lib/libopenblas-conv.so
-	rm $(OPENBLASDIR)/include/sgemmconv.h
+	rm $(INSTALLDIR)/include/gemmconv.h
+	rm $(INSTALLDIR)/lib/libopenblas-conv.so

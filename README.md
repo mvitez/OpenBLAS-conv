@@ -12,7 +12,10 @@ has been tested on various flavours of Linux.
 	make install OPENBLASDIR=<OpenBLAS base installation directory>
 	
 If no OPENBLASDIR is given, /opt/OpenBLAS is assumed.
-This will install the library in the same place where OpenBLAS is installed. Since OpenBLAS is
-installed in /opt/OpenBLAS by default and /opt/OpenBLAS/lib is not in the default search paths
-for libraries, assure to have it set (e.g. export LD_LIBRARY_PATH=/opt/OpenBLAS/lib on Linux,
-export DYLD_LIBRARY_PATH=/opt/OpenBLAS/lib on Mac).
+
+The library will be installed by default in /usr/local (include and lib).
+
+The purpose of this library is to optimize the Torch spatial convolution module.
+
+An alternative SpatialConvolutionMM.c module of Torch is provided and some test routines.
+
