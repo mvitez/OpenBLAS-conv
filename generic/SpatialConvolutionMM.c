@@ -2,11 +2,30 @@
 #define TH_GENERIC_FILE "generic/SpatialConvolutionMM.c"
 #else
 
+TH_API void THNN_(unfolded_acc)(
+          THTensor *finput,
+          THTensor *input,
+          int kW, int kH,
+          int dW, int dH,
+          int padW, int padH,
+          int nInputPlane,
+          int inputWidth, int inputHeight,
+          int outputWidth, int outputHeight);
+TH_API void THNN_(unfolded_copy)(
+          THTensor *finput,
+          THTensor *input,
+          int kW, int kH,
+          int dW, int dH,
+          int padW, int padH,
+          int nInputPlane,
+          int inputWidth, int inputHeight,
+          int outputWidth, int outputHeight);
+
 #ifdef BLASCONV
 
 #include "gemmconv.h"
 
-THTensor_(convmm)(THTensor *output, real beta, real alpha, THTensor *weight, THTensor *input, int kH, int kW,
+void THTensor_(convmm)(THTensor *output, real beta, real alpha, THTensor *weight, THTensor *input, int kH, int kW,
                  int dH, int dW, int padH, int padW, int op)
 {
 #if defined(TH_REAL_IS_DOUBLE)

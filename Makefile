@@ -1,11 +1,20 @@
 OPENBLASDIR = /opt/OpenBLAS
 INSTALLDIR = /usr/local
-
 CFLAGS = -Wall -c -fopenmp -fPIC -O3
+LIBOBJS = sgemmconv.o dgemmconv.o
 CC = gcc
+VPATH = generic
+
+ifneq ($(LUA_LIBDIR),)
+	LIBOBJS += init.o SpatialConvolutionMM.o
+	THNN = -lTHNN
+	TORCHLIBS = -L$(TORCH)/lib/lua/5.1 -lTHNN
+	INSTALLDIR = $(TORCH)/lib/lua/5.1
+endif
+
 
 .PHONY : all
-all : libopenblas-conv.so stest dtest test
+all : libopenblas-conv.so
 
 config.h:
 	sed 's/OPENBLAS_//' $(OPENBLASDIR)/include/openblas_config.h >config.h
@@ -31,14 +40,17 @@ sgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h icopy_pad.h icopy_nop
 dgemmconv.o: gemmconv.c gemmconv.h config.h arch.h param.h icopy_pad.h icopy_nopad.h icopy_pad_t.h icopy_nopad_t.h ocopy_conv.h
 	$(CC) $(CFLAGS) -DDODOUBLE gemmconv.c -o dgemmconv.o
 
+init.o: init.c
+	$(CC) $(CFLAGS) -I$(LUA_INCDIR)/TH -I. init.c -o init.o
+
 stest.o: test.c sgemmconv.o gemmconv.h
 	$(CC) $(CFLAGS) test.c -o stest.o
 
 dtest.o: test.c dgemmconv.o gemmconv.h
 	$(CC) $(CFLAGS) -DDODOUBLE test.c -o dtest.o
 
-libopenblas-conv.so: sgemmconv.o dgemmconv.o
-	$(CC) -o $@ sgemmconv.o dgemmconv.o -shared -fopenmp
+libopenblas-conv.so: $(LIBOBJS)
+	$(CC) -o $@ $(LIBOBJS) -shared -fopenmp -L$(LUA_LIBDIR)/lua/5.1 $(THNN)
 	
 stest: stest.o sgemmconv.o gemmconv.h
 	$(CC) -o $@ stest.o -fopenmp sgemmconv.o -L$(OPENBLASDIR)/lib -lopenblas
@@ -51,13 +63,10 @@ test: stest dtest
 	./dtest
 
 .PHONY : clean
-clean :
+
+clean:
 	rm -f *.o config.h icopy_*.h ocopy_conv.h libopenblas-conv.so stest dtest
 
 install:
-	cp gemmconv.h $(INSTALLDIR)/include
-	cp libopenblas-conv.so $(INSTALLDIR)/lib
-
-uninstall:
-	rm $(INSTALLDIR)/include/gemmconv.h
-	rm $(INSTALLDIR)/lib/libopenblas-conv.so
+	cp libopenblas-conv.so $(INST_LIBDIR)
+	cp openblas-conv.lua $(INST_LUADIR)
