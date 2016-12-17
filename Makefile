@@ -5,6 +5,7 @@ LIBOBJS = sgemmconv.o dgemmconv.o
 CC = gcc
 VPATH = generic
 
+UNAME_M := $(shell uname -m)
 ifneq ($(LUA_LIBDIR),)
 	LIBOBJS += init.o SpatialConvolutionMM.o
 	THNN = -lTHNN
@@ -12,6 +13,9 @@ ifneq ($(LUA_LIBDIR),)
 	INSTALLDIR = $(TORCH)/lib/lua/5.1
 endif
 
+ifneq ($(filter arm%,$(UNAME_M)),)
+	CFLAGS += -march=armv7-a -mfpu=neon
+endif
 
 .PHONY : all
 all : libopenblas-conv.so

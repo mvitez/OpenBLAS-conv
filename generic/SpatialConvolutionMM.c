@@ -155,7 +155,8 @@ void THNN_(SpatialConvolutionMM_updateOutput)(THNNState *state, THTensor *input,
     dimw++;
     dimh++;
   }
-
+  if(weight->nDimension == 4)
+    THTensor_(resize2d)(weight, weight->size[0], weight->size[1] * weight->size[2] * weight->size[3]);
   nInputPlane = input->size[dimf];
   inputWidth   = input->size[dimw];
   inputHeight  = input->size[dimh];
